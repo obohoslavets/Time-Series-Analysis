@@ -1,0 +1,456 @@
+---
+title: "Final Project"
+author: "Oleh Bohoslavets"
+date: "12/15/2019"
+output: html_document
+---
+
+```{r setup, message=FALSE, include=FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(fpp2)
+library(seasonal)
+setwd("C:/Users/olegb/Desktop/1SCSU/STAT 427")
+```
+
+#### Seasonal time series: Unemployment Rate
+#### URL: https://fred.stlouisfed.org/graph/?g=lSBW 
+#### Source: U.S. Bureau of Labor Statistics  Release: Employment Situation  
+#### Units:  Percent, Not Seasonally Adjusted
+#### Frequency:  Monthly
+#### Time: 1948-01-01 to 2019-10-01
+#### The unemployment rate represents the number of unemployed as a percentage of the labor force. Labor force data are restricted to people 16 years of age and older, who currently reside in 1 of the 50 states or the District of Columbia, who do not reside in institutions (e.g., penal and mental facilities, homes for the aged), and who are not on active duty in the Armed Forces.
+#### This rate is also defined as the U-3 measure of labor underutilization.
+#### The series comes from the 'Current Population Survey (Household Survey)'
+#### The source code is: LNU04000000
+#### Citation:
+#### U.S. Bureau of Labor Statistics, Unemployment Rate [UNRATENSA], retrieved from FRED, Federal Reserve Bank of St. Louis; https://fred.stlouisfed.org/series/UNRATENSA, December 5, 2019.
+
+
+```{r}
+Unemployment <- read.csv("Unemployment Rate.csv")
+names(Unemployment)
+U <- ts(Unemployment$UNRATENSA, start = 1948, frequency = 12)
+autoplot(U) + ggtitle("United States Unemployment Rate") + ylab("%")
+```
+
+####  The plot of Unemployement rate displays many spikes, in recent years the unemployement had been going down. In my opinion there was a lot variation in the past that is not related to the current state of economy, therefore we will only consider the data starting from year 2010.
+
+```{r}
+U = window(U, start = 2010)
+autoplot(U) + ggtitle("United States Unemployment Rate") + ylab("%")
+gglagplot(U) + ggtitle("United States Unemployment Rate, Lag Plot") + ylab("%")
+ggseasonplot(U, year.labels = T) + ggtitle("United States Unemployment Rate, Seasonal Plot") + ylab("%")
+ggsubseriesplot(U) + ggtitle("United States Unemployment Rate, Subseries Plot") + ylab("%")
+ggAcf(U) + ggtitle("United States Unemployment Rate, ACF Plot") + ylab("%")
+```
+
+#### The plot of Unemployement rate displays downward trend. The data is highly correlated with the values from the previous month and slowly decaying as the lag is increasing as could be seen from the Lag and ACF Plots. Seasonal plot displays the separate lines for each year and it is clear that data is highly seasonal, also it looks like the variation is increasing over time. 
+
+#### Let's see if any transformation is appropriate. 
+
+```{r}
+lambda = BoxCox.lambda(U)
+lambda
+autoplot(U^(lambda))
+```
+
+#### Box-Cox transformation suggests lambda that is close to 0.5 which is a square root therefore we will consider the sqrt transformation on the data when making models.
+
+#### Let's use the basic forecasting methods to make forecasts as a baseline for our future models. Mean method is not appropriate because we have a downward trend. 
+
+```{r}
+U_naive = naive(U, lambda = lambda, h = 24)
+U_snaive = snaive(U, lambda = lambda, h = 24)
+U_rwf = rwf(U, drift = T, lambda = lambda, h = 24)
+
+
+checkresiduals(U_naive)
+checkresiduals(U_snaive)
+checkresiduals(U_rwf)
+
+
+autoplot(U) + ggtitle("Presictions")+
+  autolayer(fitted(U_snaive), series = "Seasonal Naive Method") + 
+  autolayer(fitted(U_rwf), series = "Naive with Drift") + 
+  autolayer(fitted(U_naive), series = "Naive Method") + 
+  guides(color = guide_legend(title = "Forecast Method"))
+
+autoplot(U) + ggtitle("Actual forecases") + 
+  autolayer(U_snaive$mean, series = "Seasonal Naive Method") + 
+  autolayer(U_rwf$mean, series = "Naive with Drift") + 
+  autolayer(U_naive$mean, series = "Naive Method")
+```
+
+#### Naive and Naive with Drift methods residuals are centered around 0 and roughly normally distributed, significant autocorrelation structure. Seasonal Naive method residuals are below 0 which means we are consistently overestimating the unemployment rate.
+
+#### Let's check the cross validation procedure to see how methods perform on the step forecasts
+
+```{r}
+e_n_1 = tsCV(U, rwf, h = 1)
+sqrt(mean(e_n_1^2, na.rm = T))
+e_sn_1 = tsCV(U, snaive, h = 1)
+sqrt(mean(e_sn_1^2, na.rm = T))
+e_rwf_1 = tsCV(U, rwf, drift = T, h = 1)
+sqrt(mean(e_rwf_1^2, na.rm = T))
+
+e_n_12 = tsCV(U, rwf, h = 12)
+sqrt(mean(e_n_12^2, na.rm = T))
+e_sn_12 = tsCV(U, snaive, h = 12)
+sqrt(mean(e_sn_12^2, na.rm = T))
+e_rwf_12 = tsCV(U, rwf , drift = T, h = 12)
+sqrt(mean(e_rwf_12^2, na.rm = T))
+```
+
+#### Naive method outperforms other methods on 1 step forecast and on 12 step forecast.
+
+#### Let's now do the training/test split and see how these methods predict new data
+
+```{r}
+U_train = head(U, length(U)-24)
+U_test = tail(U, 24)
+
+U_naive = naive(U_train, lambda = lambda, h = 24)
+U_snaive = snaive(U_train, lambda = lambda, h = 24)
+U_rwf = rwf(U_train, drift = T, lambda = lambda, h = 24)
+
+checkresiduals(U_naive)
+checkresiduals(U_snaive)
+checkresiduals(U_rwf)
+
+accuracy(U_naive, U_test)
+accuracy(U_snaive, U_test)
+accuracy(U_rwf, U_test)
+```
+
+#### Residual diagnostics display simmilar problems as before. Accuracy measures show that Naive method performs best on new data.
+
+```{r}
+U_naive = naive(U, h = 24)
+autoplot(U_naive)+ ggtitle("True Forecasts from Naive Method") +ylab("%")
+U_naive$mean
+```
+
+#### Let's consider several linear models and see which ones satisfy our assumptions. We will start with linear models. Scince our data highly seasonal we will include the season and trend terms.
+
+```{r}
+U_lm = tslm(U ~ trend + season) 
+summary(U_lm)
+checkresiduals(U_lm)
+U_lm_t = tslm(U  ~ trend + season, lambda = lambda) 
+summary(U_lm_t)
+checkresiduals(U_lm_t)
+```
+
+#### It is clear that linear model is not appropriate because the trend parameter is estimated using drift method and our data has unsteady trend. We need to dynamically change the trend.
+
+#### We will use automatic seasonal decomposition methods X-11 or SEATS to decompose the series. We will not use classical decomposition because we want to allow for seasonal component to change. We will also consider additive and multiplicative decompositions.
+
+```{r}
+U_X11_add = seas(U, transform.function = "none", x11 = "", transform.function = "additive")
+summary(U_X11_add)
+U_X13_add = seas(U, transform.function = "none")
+summary(U_X13_add)
+U_X11_mult = seas(U, x11 = "", transform.function = "log")
+summary(U_X11_mult)
+U_X13_mult = seas(U)
+summary(U_X13_mult)
+U_stl1 = stl(U, t.window = 13, s.window = "periodic")
+summary(U_stl1)
+U_stl2 = stl(U, t.window = 13, s.window = 13)
+summary(U_stl2)
+U_stl3 = stl(U, t.window = 13, s.window = 17)
+summary(U_stl3)
+checkresiduals(U_X11_add)
+checkresiduals(U_X11_mult)
+checkresiduals(U_X13_add)
+checkresiduals(U_X13_mult)
+autoplot(U_X13_mult) + ggtitle("SEATS Multiplicative Decomposition of Unemployment Rate") + xlab("Year")
+autoplot(U_stl1) + ggtitle("STL Decomposition of Unemployment Rate, t.window = 13, s.window = periodic") + xlab("Year")
+autoplot(U_stl2) + ggtitle("STL Decomposition of Unemployment Rate, t.window = 13, s.window = 13") + xlab("Year")
+autoplot(U_stl3) + ggtitle("STL Decomposition of Unemployment Rate, t.window = 13, s.window = 17") + xlab("Year")
+```
+
+#### Surprisingly the residuals from SEATS and X_11 are identical as well as for additive and multiplicative decomposition. STL Decomposition of Unemployment Rate with t.window = 13, s.window = "periodic" seems to be most appropriate, the seasonality is not changing too much with time and the trend is dynamically changing. This is a good visualization for us to better understand the trend and seasonal components of the data.
+
+#### Let's consider some of the exponential smoothing methods. There is no point in checking the Simple Exponential Smoothing and Holt's Linear Trend Method because our data is highly seasonal. Now let's evaluate the performance of the Holt-Winters Seasonal methods
+
+```{r}
+U_hw_add = hw(U, seasonal = "additive")
+checkresiduals(U_hw_add)
+U_hw_mult = hw(U, seasonal = "multiplicative")
+checkresiduals(U_hw_mult)
+```
+
+#### Holt-Winters Seasonal Multiplicative method has a big area of overestimation in 2016 and we have a problem with autocorrelation structure. Additive mothod outperforms the Multiplicative, which is consistent with STL results. It is likely the Trend is not going to keep going down indefinitelym so we will consider the Damped Trend Holt-Winter's Seasonal Method
+
+```{r}
+U_hw_add_d = hw(U, seasonal = "additive", damped = TRUE)
+checkresiduals(U_hw_add_d)
+U_hw_mult_d = hw(U, seasonal = "multiplicative", damped = TRUE)
+checkresiduals(U_hw_mult_d)
+```
+
+#### Damped models has some autocorrelation structure. Both Additive and Multiplicative mothods equally satisfy the assumptions We will still consider this model when doing training/test split.
+
+```{r}
+autoplot(U) + 
+  autolayer(fitted(U_hw_add), series = "Holt-Winters Seasonal Additive method") + 
+  autolayer(fitted(U_hw_mult), series = "Holt-Winters Seasonal Multiplicative method") + 
+  autolayer(fitted(U_hw_add_d), series = "Damped Holt-Winters Seasonal Additive method") + 
+  autolayer(fitted(U_hw_mult_d), series = "Damped Holt-Winters Seasonal Multiplicative method") + 
+  guides(color = guide_legend(title = "Forecast Method"))
+
+```
+
+#### Now we will evaluate the performance of these models on the training and test sets of data
+
+```{r}
+U_hw_add = hw(U_train, seasonal = "additive")
+checkresiduals(U_hw_add)
+U_hw_mult = hw(U_train, seasonal = "multiplicative")
+checkresiduals(U_hw_mult)
+U_hw_add_d = hw(U_train, seasonal = "additive", damped = TRUE)
+checkresiduals(U_hw_add_d)
+U_hw_mult_d = hw(U_train, seasonal = "multiplicative", damped = TRUE)
+checkresiduals(U_hw_mult_d)
+```
+
+#### All of the methods equally satisfy the assumptions, the residuals are centered around 0 and are normally distributed, the autocorrelation structure is present in all of the models, to the least extent in Holt Winter's Additive non-damped Method.
+
+```{r}
+accuracy(U_hw_add, U_test)
+accuracy(U_hw_mult, U_test)
+accuracy(U_hw_add_d, U_test)
+accuracy(U_hw_mult_d, U_test)
+```
+
+#### Damped Holt-Winters Seasonal Additive method outperforms all of the other methods and has smallest values on all of the accuracy measures. Now let's make true forecasts into the future 12, 24 and 36 month.
+
+```{r}
+U_hw_add_d12 = hw(U, seasonal = "additive", damped = TRUE, h = 12)
+U_hw_add_d24 = hw(U, seasonal = "additive", damped = TRUE, h = 24)
+U_hw_add_d36 = hw(U, seasonal = "additive", damped = TRUE, h = 36)
+
+
+autoplot(U_hw_add_d12) + ggtitle("True Forecasts from Damped Holt-Winters Seasonal Additive Method, h =12") 
+autoplot(U_hw_add_d24) + ggtitle("True Forecasts from Damped Holt-Winters Seasonal Additive Method, h =24") 
+autoplot(U_hw_add_d36) + ggtitle("True Forecasts from Damped Holt-Winters Seasonal Additive Method, h =36") 
+
+U_hw_add_d12
+U_hw_add_d24
+U_hw_add_d36
+```
+
+#### I'd be a little suspicious of the 3 year forecasts because from historical data it is unlikely for the unemployment rate to be steady due to unforseen events.
+
+
+
+#### Seasonally adjusted time series: Personal Saving Rate
+#### URL: https://fred.stlouisfed.org/graph/?g=lGB7 
+#### Source: U.S. Bureau of Economic Analysis  Release: Personal Income and Outlays  
+#### Units:  Percent, Seasonally Adjusted Annual Rate
+#### Frequency:  Monthly
+#### Time: 1959-01-01 to 2019-10-01
+#### BEA Account Code: A072RC
+#### Personal saving as a percentage of disposable personal income (DPI), frequently referred to as "the personal saving rate," is calculated as the ratio of personal saving to DPI.
+#### Personal saving is equal to personal income less personal outlays and personal taxes; it may generally be viewed as the portion of personal income that is used either to provide funds to capital markets or to invest in real assets such as residences.(https://www.bea.gov/national/pdf/all-chapters.pdf)
+#### A Guide to the National Income and Product Accounts of the United States (NIPA).
+#### Citation:
+#### U.S. Bureau of Economic Analysis, Personal Saving Rate [PSAVERT], retrieved from FRED, Federal Reserve Bank of St. Louis; https://fred.stlouisfed.org/series/PSAVERT, December 5, 2019.
+
+```{r}
+Savings <- read.csv("Personal Saving Rate.csv")
+names(Savings)
+PS <- ts(Savings$PSAVERT, start = 1959, frequency = 12)
+autoplot(PS) + ggtitle("Personal Saving Rate") + ylab("%")
+```
+
+#### As in the previous dataset there are a lot of information that is not relevat to the present moment situation, therefore we will only use the data starting from year 2000
+
+```{r}
+PS = window(PS, start = 2000)
+autoplot(PS) + ggtitle("Personal Saving Rate") + ylab("%")
+gglagplot(PS) + ggtitle("Personal Saving Rate, Lag Plot") + ylab("%")
+ggseasonplot(PS, year.labels = T) + ggtitle("Personal Saving Rate, Seasonal Plot") + ylab("%")
+ggsubseriesplot(PS) + ggtitle("Personal Saving Rate, Subseries Plot") + ylab("%")
+ggAcf(PS) + ggtitle("Personal Saving Rate, ACF Plot") + ylab("%")
+```
+
+#### The subset appears to have an upward trend with many irregular spikes. The dataset is seasonally adjusted and Seasonal Plot shows no apparent seasonal pattern. Subseries Plot shows the average values for each month are approximately the same. The ACF Plot shows that the data is significantly correlated with the previous moths values and slowly decaying.
+
+```{r}
+lambda = BoxCox.lambda(PS)
+lambda
+```
+
+#### Since the values of the data expressed as a rate the calendar and population adjustments are not appropriate. Box-Cox transformation suggested at lambda = 1.22 which is fairly close to 1 which means no mathematical transformation needed for this data either. 
+
+#### We will now consider some of the basic forecasting techniques. Seasonal naive method is not appropriate since there is no seasonality
+
+```{r}
+PS_mean = meanf(PS, h = 24)
+PS_naive = naive(PS, h = 24)
+PS_rwf = rwf(PS, drift = T, h = 24)
+
+checkresiduals(PS_mean)
+checkresiduals(PS_naive)
+checkresiduals(PS_rwf)
+
+
+autoplot(PS) + 
+  autolayer(fitted(PS_mean), series = "Mean Method") + 
+  autolayer(fitted(PS_naive), series = "Naive Method") + 
+  autolayer(fitted(PS_rwf), series = "Naive with Drift") + 
+  guides(color = guide_legend(title = "Forecast Method"))
+
+autoplot(PS) + 
+  autolayer(PS_mean$mean, series = "Mean Method") + 
+  autolayer(PS_naive$mean, series = "Naive Method") + 
+  autolayer(PS_rwf$mean, series = "Naive with Drift")
+```
+
+#### Mean Method performs poorly due to upward trend in the data. Naive and Naive with drift methods display similar results, the residuals have some autocorrelation structure, they are centered around 0 and the distribution has heavy tails which is likely cause the autocorrelation structure.
+
+#### Let's check the cross validation procedure to see how methods perform on the step forecasts
+
+```{r}
+e_m_1 = tsCV(PS, meanf, h = 1)
+sqrt(mean(e_sn_1^2, na.rm = T))
+e_n_1 = tsCV(PS, rwf, h = 1)
+sqrt(mean(e_n_1^2, na.rm = T))
+e_rwf_1 = tsCV(PS, rwf, drift = T, h = 1)
+sqrt(mean(e_rwf_1^2, na.rm = T))
+
+e_m_12 = tsCV(PS, meanf, h = 12)
+sqrt(mean(e_sn_12^2, na.rm = T))
+e_n_12 = tsCV(PS, rwf, h = 12)
+sqrt(mean(e_n_12^2, na.rm = T))
+e_rwf_12 = tsCV(PS, rwf, drift = T, h = 12)
+sqrt(mean(e_rwf_12^2, na.rm = T))
+```
+
+#### Naive method outperforms other methods on 1 step forecast and on 12 step forecast. Mean Method outperforms others on 12 step forecast. 
+
+#### Let's now do the training/test split and see how these methods predict new data
+
+```{r}
+PS_train = head(PS, length(PS)-24)
+PS_test = tail(PS, 24)
+
+PS_mean = meanf(PS_train, h = 24)
+PS_naive = naive(PS_train, h = 24)
+PS_rwf = rwf(PS_train, drift = T, h = 24)
+
+checkresiduals(PS_mean)
+checkresiduals(PS_naive)
+checkresiduals(PS_rwf)
+
+accuracy(PS_mean, PS_test)
+accuracy(PS_naive, PS_test)
+accuracy(PS_rwf, PS_test)
+```
+
+#### We see similar residual diagnostics for the training set. Naive with Drift method predicts new data better than other methods. We will choose the Naive with Drift Method as a baseline that other models have to beat in order to be accepted.
+
+```{r}
+PS_rwf = rwf(PS, drift = T, h = 24)
+autoplot(PS_rwf)
+```
+
+#### From the forecasts plot we see that the 95% confidence interval is below 0 which is impossible in a real world scenario, therefore we need to be careful when making the forecasts in the future.
+
+#### Let's now consider exponential smoothing methods Holt Winter's Method is not appropriate because our data does not have seasonal patterns
+
+```{r}
+PS_ses.1 = ses(PS, alpha = .1, initial = "simple")
+PS_ses.2 = ses(PS, alpha = .2, initial = "simple")
+PS_ses.4 = ses(PS, alpha = .4, initial = "simple")
+PS_ses.6 = ses(PS, alpha = .6, initial = "simple")
+PS_ses.8 = ses(PS, alpha = .8, initial = "simple")
+PS_ses = ses(PS)
+
+checkresiduals(PS_ses.1)
+checkresiduals(PS_ses.2)
+checkresiduals(PS_ses.4)
+checkresiduals(PS_ses.6)
+checkresiduals(PS_ses.8)
+checkresiduals(PS_ses)
+
+autoplot(PS) + ggtitle("Predictions")+
+  autolayer(fitted(PS_ses.1), series = "SES Method alpha = .1") + 
+  autolayer(fitted(PS_ses.2), series = "SES Method alpha = .2") + 
+  autolayer(fitted(PS_ses.4), series = "SES Method alpha = .4") + 
+  autolayer(fitted(PS_ses.6), series = "SES Method alpha = .6") + 
+  autolayer(fitted(PS_ses.8), series = "SES Method alpha = .8") + 
+  autolayer(fitted(PS_ses), series = "SES Method alpha = 1") + 
+  guides(color = guide_legend(title = "Forecast Method"))
+
+autoplot(PS) + ggtitle("Actual forecasts")+
+  autolayer(PS_ses.1$mean, series = "SES Method alpha = .1") + 
+  autolayer(PS_ses.2$mean, series = "SES Method alpha = .2") + 
+  autolayer(PS_ses.4$mean, series = "SES Method alpha = .4") + 
+  autolayer(PS_ses.6$mean, series = "SES Method alpha = .6") + 
+  autolayer(PS_ses.8$mean, series = "SES Method alpha = .8") + 
+  autolayer(PS_ses$mean, series = "SES Method alpha = 1") + 
+  guides(color = guide_legend(title = "Forecast Method"))
+```
+
+#### SES with alpha = 0.1 has autocorrelation problem and big areas of under and overestimation. Other models roughly satisfy the assumptions.
+
+#### Let's now consider the Holt's Linear Trend Method, damped and non-damped.
+
+```{r}
+PS_holt = holt(PS)
+PS_holt_d = holt(PS, damped = T)
+
+checkresiduals(PS_holt)
+checkresiduals(PS_holt_d)
+```
+
+#### Both Holt's Linear Trend Methods equally satisfy the assumptions. Residuals are centered around 0 and are normally distributed, although with several outliers.
+
+#### Let's evaluate the performance of these models on new data 
+
+```{r}
+PS_ses.2 = ses(PS_train, alpha = .2, initial = "simple")
+PS_ses.4 = ses(PS_train, alpha = .4, initial = "simple")
+PS_ses.6 = ses(PS_train, alpha = .6, initial = "simple")
+PS_ses.8 = ses(PS_train, alpha = .8, initial = "simple")
+PS_ses = ses(PS_train)
+PS_holt = holt(PS_train)
+PS_holt_d = holt(PS_train, damped = T)
+
+checkresiduals(PS_ses.2)
+checkresiduals(PS_ses.4)
+checkresiduals(PS_ses.6)
+checkresiduals(PS_ses.8)
+checkresiduals(PS_ses)
+checkresiduals(PS_holt)
+checkresiduals(PS_holt_d)
+```
+
+#### All methods equally satisfy the assumptions. Residuals are centered around 0 and are normally distributed, although with several outliers. Some models have slightly bigger problem with autocorrelation.
+
+```{r}
+accuracy(PS_ses.2, PS_test)
+accuracy(PS_ses.4, PS_test)
+accuracy(PS_ses.6, PS_test)
+accuracy(PS_ses.8, PS_test)
+accuracy(PS_ses, PS_test)
+accuracy(PS_holt, PS_test)
+accuracy(PS_holt_d, PS_test)
+```
+
+#### Non-Damped Holt's Linear Trend Method outperforms other methods on all of the all of the accuracy measures. We will choode this method as our final model.
+
+```{r}
+PS_holt12 = holt(PS, h = 12)
+PS_holt24 = holt(PS, h = 24)
+PS_holt36 = holt(PS, h = 36)
+
+autoplot(PS_holt12) + ggtitle("Forecasts of Personal Saving Rate with Holt's Linear Trend Method, h = 12")
+autoplot(PS_holt24) + ggtitle("Forecasts of Personal Saving Rate with Holt's Linear Trend Method, h = 24")
+autoplot(PS_holt36) + ggtitle("Forecasts of Personal Saving Rate with Holt's Linear Trend Method, h = 36")
+
+PS_holt36
+```
